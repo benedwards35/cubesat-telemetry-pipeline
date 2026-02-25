@@ -1,12 +1,35 @@
 import os
 import psycopg2
 import psycopg2.extras
+import json
 from flask import Flask, jsonify, request, g
 from dotenv import load_dotenv
+from datetime import datetime, timezone
+import decimal
+
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, decimal.Decimal):
+            return float(obj)
+        return super().default(obj)
+    
+def format_row(row):
+    """Convert a RealDictRow to a plain dict with formatted timestamp."""
+    d = dict(row)
+    if 'timestamp' in d and d['timestamp'] is not None:
+        # Convert Unix epoch float to ISO 8601 string
+        d['timestamp'] = datetime.fromtimestamp(
+            float(d['timestamp']), tz=timezone.utc
+        ).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    if 'received_at' in d and d['received_at'] is not None:
+        # received_at is already a datetime object from psycopg2
+        d['received_at'] = d['received_at'].strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    return d
 
 load_dotenv()
 
 app = Flask(__name__)
+app.json_encoder = DecimalEncoder
 
 def get_db():
     if 'db' not in g:
@@ -47,7 +70,7 @@ def latest():
 
     return jsonify({
         "count": len(rows),
-        "readings": [dict(row) for row in rows]
+        "readings": [format_row(row) for row in rows]
     })
 
 @app.route('/telemetry/history')
@@ -86,7 +109,7 @@ def history():
     return jsonify({
         "count": len(rows),
         "filters": {"sensor": sensor, "limit": limit},
-        "readings": [dict(row) for row in rows]
+        "readings": [format_row(row) for row in rows]
     })
 
 ANOMALY_THRESHOLDS = {
@@ -138,7 +161,28 @@ def anomalies():
         "count": len(rows),
         "thresholds": ANOMALY_THRESHOLDS,
         "filters": {"sensor": sensor, "limit": limit},
-        "anomalies": [dict(row) for row in rows]
+        "anomalies": [format_row(row) for row in rows]
+    })
+
+@app.route('/telemetry/stats')
+def stats():
+    db = get_db()
+    with db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("""
+            SELECT
+                sensor_id,
+                COUNT(*)                    AS count,
+                ROUND(MIN(value)::numeric, 2)  AS min,
+                ROUND(AVG(value)::numeric, 2)  AS avg,
+                ROUND(MAX(value)::numeric, 2)  AS max
+            FROM packets
+            GROUP BY sensor_id
+            ORDER BY sensor_id
+        """)
+        rows = cur.fetchall()
+
+    return jsonify({
+        "sensors": [dict(row) for row in rows]
     })
 
 if __name__ == '__main__':
