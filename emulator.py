@@ -34,9 +34,25 @@ def build_packet(sensor_id, value) -> str:
     cs = checksum(body)
     return f"{body}|{cs}\n"
 
-def inject_fault():
-    """Randomly inject a malformed packet to simulate corruption."""
-    return "SAT|CORRUPTED|###\n"
+def inject_fault(sensor_id=None, value=None):
+    # Two Fault modes: 30% corrupt packet, 70% value spike
+    if random.random() < 0.3:
+        # Corrupt packet
+        return "SAT|CORRUPTED|###\n"
+    else:
+        # Value spike
+        s_id = sensor_id or random.choice(list(SENSORS.keys()))
+        spike_ranges = {
+            'TEMP':     lambda: random.choice([random.uniform(-20, 10), random.uniform(40, 80)]),
+            'HUMIDITY': lambda: random.choice([random.uniform(-10, 10), random.uniform(90, 120)]),
+            'DISTANCE': lambda: random.choice([random.uniform(0, 30),   random.uniform(220, 400)]),
+        }
+        spike_value = round(spike_ranges[s_id](), 2)
+        timestamp = round(time.time(), 3)
+        body = f"SAT|{timestamp}|{s_id}|{spike_value}"
+        cs = checksum(body)
+        print(f"[SPIKE INJECTED] {s_id} = {spike_value}")
+        return f"{body}|{cs}\n"
 
 def run_emulator():
     print(f"Starting telemetry emulator on {HOST}:{PORT}")
@@ -53,7 +69,7 @@ def run_emulator():
                 for sensor_id in SENSORS:
                     # 2% Fault Rate
                     if random.randint(1, 50) == 1:
-                        packet = inject_fault()
+                        packet = inject_fault(sensor_id)
                         print(f"[FAULT INJECTED] {packet.strip()}")
                     else:
                         value = simulate_sensor(sensor_id)
