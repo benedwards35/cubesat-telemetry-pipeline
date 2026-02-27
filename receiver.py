@@ -1,6 +1,5 @@
 import socket
 import psycopg2
-from datetime import datetime
 from dotenv import load_dotenv
 import os
 
@@ -52,29 +51,34 @@ def insert_packet(cursor, packet):
 def run_receiver():
     print("Connecting to database...")
     conn = psycopg2.connect(**DB_CONFIG)
-    cursor = conn.cursor()
     print("Database connected.")
 
-    print(f"Connecting to emulator at {HOST}:{PORT}...")
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((HOST, PORT))
-        print("Connected to emulator. Receiving telemetry...\n")
-        buffer = ""
-        while True:
-            data = s.recv(1024).decode('utf-8')
-            if not data:
-                print("Emulator disconnected.")
-                break
-            buffer += data
-            while '\n' in buffer:
-                line, buffer = buffer.split('\n', 1)
-                packet = validate_packet(line)
-                if packet:
-                    insert_packet(cursor, packet)
-                    conn.commit()
-                    print(f"[STORED] {packet}")
-                else:
-                    print(f"[DISCARDED] {line}")
+    try:
+        with conn:
+            with conn.cursor() as cursor:
+                print(f"Connecting to emulator at {HOST}:{PORT}...")
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.connect((HOST, PORT))
+                    print("Connected to emulator. Receiving telemetry...\n")
+                    buffer = ""
+                    while True:
+                        data = s.recv(1024).decode('utf-8')
+                        if not data:
+                            print("Emulator disconnected.")
+                            break
+                        buffer += data
+                        while '\n' in buffer:
+                            line, buffer = buffer.split('\n', 1)
+                            packet = validate_packet(line)
+                            if packet:
+                                insert_packet(cursor, packet)
+                                conn.commit()
+                                print(f"[STORED] {packet}")
+                            else:
+                                print(f"[DISCARDED] {line}")
+    finally:
+        conn.close()
+        print("Database connection closed.")
 
 if __name__ == '__main__':
     run_receiver()
