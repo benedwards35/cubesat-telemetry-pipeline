@@ -1,16 +1,32 @@
 # CubeSat Telemetry Pipeline
 
-A ground station telemetry pipeline that simulates receiving sensor data from a CubeSat, validates it, stores it in PostgreSQL, and exposes it via a Flask REST API.
+A full-stack ground station telemetry pipeline that simulates receiving sensor data from a CubeSat, validates it, stores it in PostgreSQL, exposes it via a Flask REST API, and visualizes it in a React dashboard.
 
 Built as a portfolio project drawing on full-stack Python/Flask/REST API experience from a NASA Marshall Space Flight Center internship (Summer 2025).
+
+---
+
+## Dashboard
+
+![Overview](docs/screenshot_overview.png)
+*Overview — live sensor readings with sparklines and anomaly alert strip*
+
+![History](docs/screenshot_history.png)
+*History — queryable packet log with sensor and row-limit filters*
+
+![Anomalies](docs/screenshot_anomalies.png)
+*Anomalies — flagged out-of-range readings with HIGH/LOW direction indicators*
+
+![Statistics](docs/screenshot_statistics.png)
+*Statistics — aggregate min/avg/max per sensor across all stored packets*
 
 ---
 
 ## Architecture
 
 ```
-emulator.py  ──►  receiver.py  ──►  PostgreSQL  ──►  api.py
-                                     (telemetry      (REST API)
+emulator.py  ──►  receiver.py  ──►  PostgreSQL  ──►  api.py  ──►  frontend/
+                                     (telemetry      (REST API)    (React dashboard)
 Generates fake     Validates via      database)
 sensor packets     XOR checksum,
 over TCP at        discards corrupt
@@ -18,7 +34,7 @@ over TCP at        discards corrupt
 fault injection    clean data
 ```
 
-The emulator and receiver are decoupled from the API — they communicate only through the database. This mirrors real ground station architecture where data ingest and data serving are separate concerns.
+The emulator and receiver are decoupled from the API — they communicate only through the database. This mirrors real ground station architecture where data ingest and data serving are separate concerns. The frontend is a separate process that queries the API over HTTP.
 
 ---
 
@@ -29,18 +45,26 @@ The emulator and receiver are decoupled from the API — they communicate only t
 - **Fault injection** — ~2% of packets are intentionally corrupted (bad checksums) or contain anomalous sensor values, simulating real hardware failures
 - **PostgreSQL persistence** with indexed storage
 - **REST API** with four endpoints for querying telemetry data
+- **React dashboard** with live auto-refreshing overview, queryable history table, anomaly feed, and statistics
 - **ISO 8601 timestamps** on all API responses
 
 ---
 
 ## Tech Stack
 
-- **Python 3.14** — emulator, receiver, API
-- **Flask** — REST API framework
-- **PostgreSQL** — telemetry storage
-- **psycopg2** — PostgreSQL adapter
-- **python-dotenv** — environment variable management
-- **pyserial** — (ready for Arduino hardware integration, see below)
+**Backend**
+- Python 3.10+ — emulator, receiver, API
+- Flask — REST API framework
+- Flask-CORS — cross-origin request handling for the frontend
+- PostgreSQL — telemetry storage
+- psycopg2 — PostgreSQL adapter
+- python-dotenv — environment variable management
+- pyserial — ready for Arduino hardware integration
+
+**Frontend**
+- React 18 + Vite
+- Recharts — sparkline charts
+- Google Fonts — Share Tech Mono + Barlow Condensed
 
 ---
 
@@ -48,12 +72,20 @@ The emulator and receiver are decoupled from the API — they communicate only t
 
 ```
 cubesat-telemetry-pipeline/
-├── emulator.py       # Simulates CubeSat sensor transmissions over TCP
-├── receiver.py       # Validates packets, writes clean data to PostgreSQL
-├── api.py            # Flask REST API
-├── .env              # DB credentials (not committed)
-├── .env.example      # Template for environment setup
-└── .venv/            # Virtual environment
+├── emulator.py           # Simulates CubeSat sensor transmissions over TCP
+├── receiver.py           # Validates packets, writes clean data to PostgreSQL
+├── api.py                # Flask REST API
+├── .env                  # DB credentials (not committed)
+├── .env.example          # Template for environment setup
+├── .venv/                # Python virtual environment
+└── frontend/
+    └── cubesat-dashboard/
+        ├── src/
+        │   ├── CubeSatDashboard.jsx   # Main dashboard component
+        │   ├── main.jsx
+        │   ├── App.css
+        │   └── index.css
+        └── package.json
 ```
 
 ---
@@ -64,6 +96,7 @@ cubesat-telemetry-pipeline/
 
 - Python 3.10+
 - PostgreSQL 14+
+- Node.js 18+
 
 ### 1. Clone and create virtual environment
 
@@ -79,10 +112,10 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-### 2. Install dependencies
+### 2. Install Python dependencies
 
 ```bash
-pip install flask psycopg2-binary python-dotenv pyserial
+pip install flask flask-cors psycopg2-binary python-dotenv pyserial
 ```
 
 ### 3. Create the database
@@ -112,11 +145,19 @@ DB_USER=postgres
 DB_PASSWORD=your_password_here
 ```
 
+### 5. Install frontend dependencies
+
+```bash
+cd frontend/cubesat-dashboard
+npm install
+npm install recharts
+```
+
 ---
 
 ## Running the Pipeline
 
-The pipeline requires three terminals running simultaneously:
+The full pipeline requires four terminals running simultaneously.
 
 **Terminal 1 — Start the emulator:**
 ```bash
@@ -133,7 +174,15 @@ python receiver.py
 python api.py
 ```
 
-The emulator will wait for the receiver to connect before transmitting. Once all three are running, the API is available at `http://localhost:5000`.
+**Terminal 4 — Start the frontend:**
+```bash
+cd frontend/cubesat-dashboard
+npm run dev
+```
+
+The emulator will wait for the receiver to connect before transmitting. Once all four are running:
+- API: `http://localhost:5000`
+- Dashboard: `http://localhost:5173`
 
 ---
 
@@ -191,21 +240,13 @@ Uses PostgreSQL's `DISTINCT ON (sensor_id)` to efficiently return the single mos
 ### `GET /telemetry/history`
 All readings with optional filters.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `sensor`  | string | none | Filter by sensor ID (`TEMP`, `HUMIDITY`, `DISTANCE`) |
-| `limit`   | int | 100 | Max number of results (1–10000) |
+| Parameter | Type    | Default | Description |
+|-----------|---------|---------|-------------|
+| `sensor`  | string  | none    | Filter by sensor ID (`TEMP`, `HUMIDITY`, `DISTANCE`) |
+| `limit`   | int     | 100     | Max number of results (1–10000) |
 
 ```bash
 curl "http://localhost:5000/telemetry/history?sensor=TEMP&limit=5"
-```
-
-```json
-{
-  "count": 5,
-  "filters": {"sensor": "TEMP", "limit": 5},
-  "readings": [...]
-}
 ```
 
 ---
@@ -213,26 +254,14 @@ curl "http://localhost:5000/telemetry/history?sensor=TEMP&limit=5"
 ### `GET /telemetry/anomalies`
 Readings outside normal operating range per sensor. Supports the same `sensor` and `limit` filters as `/history`.
 
-| Sensor | Normal Range |
-|--------|-------------|
-| TEMP | 15.0 – 30.0 °C |
-| HUMIDITY | 20.0 – 80.0 % |
-| DISTANCE | 50.0 – 200.0 cm |
+| Sensor   | Normal Range    |
+|----------|----------------|
+| TEMP     | 15.0 – 30.0 °C |
+| HUMIDITY | 20.0 – 80.0 %  |
+| DISTANCE | 50.0 – 200.0 cm|
 
 ```bash
 curl "http://localhost:5000/telemetry/anomalies"
-```
-
-```json
-{
-  "count": 3,
-  "thresholds": {
-    "TEMP":     {"min": 15.0, "max": 30.0},
-    "HUMIDITY": {"min": 20.0, "max": 80.0},
-    "DISTANCE": {"min": 50.0, "max": 200.0}
-  },
-  "anomalies": [...]
-}
 ```
 
 ---
@@ -260,11 +289,11 @@ curl http://localhost:5000/telemetry/stats
 
 The emulator generates values around realistic base values with small noise and drift:
 
-| Sensor | Base Value | Noise | Units |
-|--------|-----------|-------|-------|
-| TEMP | 22.0 | ±0.5 | °C |
-| HUMIDITY | 45.0 | ±1.0 | % RH |
-| DISTANCE | 100.0 | ±2.0 | cm |
+| Sensor   | Base Value | Noise | Units |
+|----------|-----------|-------|-------|
+| TEMP     | 22.0      | ±0.5  | °C    |
+| HUMIDITY | 45.0      | ±1.0  | % RH  |
+| DISTANCE | 100.0     | ±2.0  | cm    |
 
 ---
 
@@ -292,4 +321,5 @@ The receiver, database, and API require no changes — only the data source swap
 
 ## Author
 
-Ben Edwards — Junior CS student at Saint John's University (Collegeville, MN).  
+Ben Edwards — Junior CS student at Saint John's University (Collegeville, MN).
+NASA Marshall Space Flight Center intern, Summer 2025.

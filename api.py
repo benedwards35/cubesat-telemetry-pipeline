@@ -5,7 +5,10 @@ import json
 from flask import Flask, jsonify, request, g
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+from flask_cors import CORS
 import decimal
+
+
 
 class DecimalEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -30,6 +33,7 @@ load_dotenv()
 
 app = Flask(__name__)
 app.json_encoder = DecimalEncoder
+CORS(app)
 
 def get_db():
     if 'db' not in g:
